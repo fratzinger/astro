@@ -1,6 +1,6 @@
-import { defineConfig } from 'astro/config';
+import { fileURLToPath } from 'node:url';
 import tailwind from '@astrojs/tailwind';
-import { fileURLToPath } from 'url';
+import { defineConfig } from 'astro/config';
 
 export default defineConfig({
 	integrations: [

@@ -1,10 +1,15 @@
-import type { AstroConfig, RouteData, ValidRedirectStatus } from 'astro';
 import { posix } from 'node:path';
+import type {
+	AstroConfig,
+	HookParameters,
+	IntegrationResolvedRoute,
+	ValidRedirectStatus,
+} from 'astro';
 import { Redirects } from './redirects.js';
 
 const pathJoin = posix.join;
 
-function getRedirectStatus(route: RouteData): ValidRedirectStatus {
+function getRedirectStatus(route: IntegrationResolvedRoute): ValidRedirectStatus {
 	if (typeof route.redirect === 'object') {
 		return route.redirect.status;
 	}
@@ -12,12 +17,14 @@ function getRedirectStatus(route: RouteData): ValidRedirectStatus {
 }
 
 interface CreateRedirectsFromAstroRoutesParams {
-	config: Pick<AstroConfig, 'build' | 'output'>;
+	config: Pick<AstroConfig, 'build' | 'output' | 'base'>;
 	/**
 	 * Maps a `RouteData` to a dynamic target
 	 */
-	routeToDynamicTargetMap: Map<RouteData, string>;
+	routeToDynamicTargetMap: Map<IntegrationResolvedRoute, string>;
 	dir: URL;
+	buildOutput: 'static' | 'server';
+	assets: HookParameters<'astro:build:done'>['assets'];
 }
 
 /**
@@ -27,11 +34,19 @@ export function createRedirectsFromAstroRoutes({
 	config,
 	routeToDynamicTargetMap,
 	dir,
+	buildOutput,
+	assets,
 }: CreateRedirectsFromAstroRoutesParams) {
-	const output = config.output;
+	const base =
+		config.base && config.base !== '/'
+			? config.base.endsWith('/')
+				? config.base.slice(0, -1)
+				: config.base
+			: '';
 	const _redirects = new Redirects();
 
 	for (const [route, dynamicTarget = ''] of routeToDynamicTargetMap) {
+		const distURL = assets.get(route.pattern);
 		// A route with a `pathname` is as static route.
 		if (route.pathname) {
 			if (route.redirect) {
@@ -39,7 +54,7 @@ export function createRedirectsFromAstroRoutes({
 				// from the user if provided.
 				_redirects.add({
 					dynamic: false,
-					input: route.pathname,
+					input: `${base}${route.pathname}`,
 					target: typeof route.redirect === 'object' ? route.redirect.destination : route.redirect,
 					status: getRedirectStatus(route),
 					weight: 2,
@@ -48,26 +63,26 @@ export function createRedirectsFromAstroRoutes({
 			}
 
 			// If this is a static build we don't want to add redirects to the HTML file.
-			if (output === 'static') {
+			if (buildOutput === 'static') {
 				continue;
-			} else if (route.distURL) {
+			} else if (distURL) {
 				_redirects.add({
 					dynamic: false,
-					input: route.pathname,
-					target: prependForwardSlash(route.distURL.toString().replace(dir.toString(), '')),
+					input: `${base}${route.pathname}`,
+					target: prependForwardSlash(distURL.toString().replace(dir.toString(), '')),
 					status: 200,
 					weight: 2,
 				});
 			} else {
 				_redirects.add({
 					dynamic: false,
-					input: route.pathname,
+					input: `${base}${route.pathname}`,
 					target: dynamicTarget,
 					status: 200,
 					weight: 2,
 				});
 
-				if (route.route === '/404') {
+				if (route.pattern === '/404') {
 					_redirects.add({
 						dynamic: true,
 						input: '/*',
@@ -83,7 +98,7 @@ export function createRedirectsFromAstroRoutes({
 			const pattern = generateDynamicPattern(route);
 
 			// This route was prerendered and should be forwarded to the HTML file.
-			if (route.distURL) {
+			if (distURL) {
 				const targetRoute = route.redirectRoute ?? route;
 				const targetPattern = generateDynamicPattern(targetRoute);
 				let target = targetPattern;
@@ -94,7 +109,7 @@ export function createRedirectsFromAstroRoutes({
 				}
 				_redirects.add({
 					dynamic: true,
-					input: pattern,
+					input: `${base}${pattern}`,
 					target,
 					status: route.type === 'redirect' ? 301 : 200,
 					weight: 1,
@@ -102,7 +117,7 @@ export function createRedirectsFromAstroRoutes({
 			} else {
 				_redirects.add({
 					dynamic: true,
-					input: pattern,
+					input: `${base}${pattern}`,
 					target: dynamicTarget,
 					status: 200,
 					weight: 1,
@@ -119,7 +134,7 @@ export function createRedirectsFromAstroRoutes({
  * /team/articles/*
  * With stars replacing spread and :id syntax replacing [id]
  */
-function generateDynamicPattern(route: RouteData) {
+function generateDynamicPattern(route: IntegrationResolvedRoute) {
 	const pattern =
 		'/' +
 		route.segments
